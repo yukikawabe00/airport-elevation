@@ -1,0 +1,351 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+<title>世界の空港 標高マップ</title>
+
+<!-- MapLibre GL JS（地図本体） -->
+<link href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css" rel="stylesheet" />
+<script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+<!-- deck.gl（3Dの棒グラフ） -->
+<script src="https://unpkg.com/deck.gl@9.0.38/dist.min.js"></script>
+
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; font-family: "Hiragino Kaku Gothic ProN", "Yu Gothic", "Meiryo", system-ui, sans-serif; }
+  #map { position: absolute; inset: 0; background: #0b1020; }
+
+  .card {
+    position:absolute; z-index:5; color:#fff;
+    background:rgba(10,16,32,.72); border:1px solid rgba(255,255,255,.12);
+    border-radius:12px; backdrop-filter:blur(6px); padding:10px 14px;
+  }
+  #title { top:14px; left:14px; max-width:330px; }
+  #title h1 { margin:0 0 4px; font-size:16px; letter-spacing:.02em; }
+  #title p { margin:0; font-size:11px; color:#9fb3d1; line-height:1.5; }
+
+  #controls { top:14px; right:14px; width:210px; font-size:12px; }
+  #controls label { display:block; margin-bottom:6px; color:#cfe0f7; }
+  #controls input[type=range] { width:100%; }
+  #exVal { color:#ffd36b; font-variant-numeric:tabular-nums; }
+  #controls .region { margin-top:12px; }
+  #controls button {
+    width:100%; margin-top:6px; padding:6px; cursor:pointer; font-size:12px;
+    color:#fff; background:rgba(255,255,255,.08);
+    border:1px solid rgba(255,255,255,.18); border-radius:8px;
+  }
+  #controls button:hover { background:rgba(255,255,255,.16); }
+
+  #legend { bottom:16px; left:14px; font-size:11px; }
+  #legend b { display:block; margin-bottom:6px; color:#cfe0f7; }
+  .legrow { display:flex; align-items:center; gap:8px; margin:3px 0; }
+  .swatch { width:16px; height:10px; border-radius:2px; }
+
+  #panel {
+    right:14px; bottom:16px; width:262px; padding:16px;
+    background:rgba(10,16,32,.92); border:1px solid rgba(255,255,255,.15);
+    border-radius:14px; backdrop-filter:blur(8px);
+    transform:translateY(160%); transition:transform .25s ease;
+    box-shadow:0 10px 40px rgba(0,0,0,.5);
+  }
+  #panel.show { transform:translateY(0); }
+  #panel .code { font-size:11px; color:#9fb3d1; letter-spacing:.08em; }
+  #panel h2 { margin:2px 0 10px; font-size:18px; }
+  #panel .big { font-size:30px; font-weight:700; }
+  #panel .big small { font-size:13px; color:#9fb3d1; font-weight:400; }
+  #panel .row { display:flex; justify-content:space-between; font-size:12px; color:#cfe0f7; margin:6px 0; }
+  #panel .close { position:absolute; top:10px; right:12px; cursor:pointer; color:#9fb3d1; font-size:18px; }
+  #panel .close:hover { color:#fff; }
+</style>
+</head>
+<body>
+<div id="map"></div>
+
+<div id="title" class="card">
+  <h1>🛫 世界の空港 標高マップ</h1>
+  <p>棒の<b>高さ</b>＝空港の標高。色も標高に対応。<br>棒にカーソルを乗せる／タップで情報が出ます。</p>
+</div>
+
+<div id="controls" class="card">
+  <label>高さの強調 <span id="exVal">×200</span></label>
+  <input id="exaggerate" type="range" min="50" max="1000" step="50" value="200" />
+  <div class="region">
+    <button id="btn-world">🌐 世界全体へ</button>
+    <button id="btn-japan">🗾 日本へズーム</button>
+  </div>
+</div>
+
+<div id="legend" class="card">
+  <b>標高（m）</b>
+  <div class="legrow"><span class="swatch" style="background:rgb(0,80,210)"></span>0–10</div>
+  <div class="legrow"><span class="swatch" style="background:rgb(0,140,230)"></span>10–50</div>
+  <div class="legrow"><span class="swatch" style="background:rgb(0,200,200)"></span>50–150</div>
+  <div class="legrow"><span class="swatch" style="background:rgb(0,200,100)"></span>150–400</div>
+  <div class="legrow"><span class="swatch" style="background:rgb(150,210,0)"></span>400–800</div>
+  <div class="legrow"><span class="swatch" style="background:rgb(240,200,0)"></span>800–1500</div>
+  <div class="legrow"><span class="swatch" style="background:rgb(245,140,0)"></span>1500–2500</div>
+  <div class="legrow"><span class="swatch" style="background:rgb(235,60,20)"></span>2500–3500</div>
+  <div class="legrow"><span class="swatch" style="background:rgb(220,30,120)"></span>3500以上</div>
+</div>
+
+<div id="panel" class="card">
+  <span class="close" onclick="hidePanel()">✕</span>
+  <div class="code" id="p-code"></div>
+  <h2 id="p-name"></h2>
+  <div class="big"><span id="p-elev"></span><small> m</small></div>
+  <div class="row"><span>英語名</span><span id="p-en"></span></div>
+  <div class="row"><span>国・地域</span><span id="p-country"></span></div>
+  <div class="row"><span>緯度</span><span id="p-lat"></span></div>
+  <div class="row"><span>経度</span><span id="p-lon"></span></div>
+</div>
+
+<script>
+/* ============================================================
+   空港データ（標高は概算・メートル）。
+   { code, name(和名), en(英語名), country, lat, lon, elev(標高m) }
+   ※正確な値に差し替えたい場合はここを編集してください。
+   ============================================================ */
+const AIRPORTS = [
+  // ===== 日本 =====
+  { code:"CTS", name:"新千歳",   en:"New Chitose", country:"日本", lat:42.7752, lon:141.6923, elev:25 },
+  { code:"HKD", name:"函館",     en:"Hakodate",    country:"日本", lat:41.7700, lon:140.8219, elev:34 },
+  { code:"AKJ", name:"旭川",     en:"Asahikawa",   country:"日本", lat:43.6708, lon:142.4475, elev:210 },
+  { code:"MMB", name:"女満別",   en:"Memanbetsu",  country:"日本", lat:43.8806, lon:144.1640, elev:39 },
+  { code:"KUH", name:"釧路",     en:"Kushiro",     country:"日本", lat:43.0410, lon:144.1928, elev:96 },
+  { code:"OBO", name:"帯広",     en:"Obihiro",     country:"日本", lat:42.7333, lon:143.2173, elev:153 },
+  { code:"WKJ", name:"稚内",     en:"Wakkanai",    country:"日本", lat:45.4042, lon:141.8011, elev:9 },
+  { code:"SHB", name:"中標津",   en:"Nakashibetsu",country:"日本", lat:43.5775, lon:144.9600, elev:71 },
+  { code:"AOJ", name:"青森",     en:"Aomori",      country:"日本", lat:40.7347, lon:140.6906, elev:198 },
+  { code:"MSJ", name:"三沢",     en:"Misawa",      country:"日本", lat:40.7032, lon:141.3686, elev:36 },
+  { code:"HNA", name:"いわて花巻",en:"Hanamaki",   country:"日本", lat:39.4286, lon:141.1347, elev:89 },
+  { code:"AXT", name:"秋田",     en:"Akita",       country:"日本", lat:39.6156, lon:140.2186, elev:96 },
+  { code:"ONJ", name:"大館能代", en:"Odate-Noshiro",country:"日本",lat:40.1919, lon:140.3719, elev:89 },
+  { code:"GAJ", name:"山形",     en:"Yamagata",    country:"日本", lat:38.4119, lon:140.3711, elev:106 },
+  { code:"SYO", name:"庄内",     en:"Shonai",      country:"日本", lat:38.8122, lon:139.7872, elev:25 },
+  { code:"SDJ", name:"仙台",     en:"Sendai",      country:"日本", lat:38.1397, lon:140.9169, elev:5 },
+  { code:"FKS", name:"福島",     en:"Fukushima",   country:"日本", lat:37.2275, lon:140.4308, elev:372 },
+  { code:"KIJ", name:"新潟",     en:"Niigata",     country:"日本", lat:37.9558, lon:139.1206, elev:3 },
+  { code:"HND", name:"東京/羽田",en:"Tokyo Haneda",country:"日本", lat:35.5494, lon:139.7798, elev:6 },
+  { code:"NRT", name:"成田",     en:"Narita",      country:"日本", lat:35.7647, lon:140.3864, elev:41 },
+  { code:"IBR", name:"茨城",     en:"Ibaraki",     country:"日本", lat:36.1814, lon:140.4147, elev:31 },
+  { code:"NGO", name:"中部/セントレア",en:"Chubu Centrair",country:"日本",lat:34.8584,lon:136.8054,elev:4 },
+  { code:"NKM", name:"名古屋/小牧",en:"Nagoya Komaki",country:"日本",lat:35.2550,lon:136.9244,elev:14 },
+  { code:"FSZ", name:"静岡",     en:"Shizuoka",    country:"日本", lat:34.7961, lon:138.1894, elev:132 },
+  { code:"MMJ", name:"松本",     en:"Matsumoto",   country:"日本", lat:36.1668, lon:137.9227, elev:658 },
+  { code:"TOY", name:"富山",     en:"Toyama",      country:"日本", lat:36.6483, lon:137.1875, elev:9 },
+  { code:"KMQ", name:"小松",     en:"Komatsu",     country:"日本", lat:36.3946, lon:136.4066, elev:10 },
+  { code:"NTQ", name:"能登",     en:"Noto",        country:"日本", lat:37.2931, lon:136.9619, elev:218 },
+  { code:"ITM", name:"大阪/伊丹",en:"Osaka Itami", country:"日本", lat:34.7855, lon:135.4382, elev:15 },
+  { code:"KIX", name:"関西",     en:"Kansai",      country:"日本", lat:34.4347, lon:135.2440, elev:8 },
+  { code:"UKB", name:"神戸",     en:"Kobe",        country:"日本", lat:34.6328, lon:135.2240, elev:8 },
+  { code:"OKJ", name:"岡山",     en:"Okayama",     country:"日本", lat:34.7569, lon:133.8553, elev:242 },
+  { code:"HIJ", name:"広島",     en:"Hiroshima",   country:"日本", lat:34.4361, lon:132.9194, elev:331 },
+  { code:"UBJ", name:"山口宇部", en:"Yamaguchi Ube",country:"日本",lat:33.9300, lon:131.2786, elev:7 },
+  { code:"IZO", name:"出雲",     en:"Izumo",       country:"日本", lat:35.4136, lon:132.8900, elev:5 },
+  { code:"YGJ", name:"米子",     en:"Yonago",      country:"日本", lat:35.4922, lon:133.2364, elev:6 },
+  { code:"TTJ", name:"鳥取",     en:"Tottori",     country:"日本", lat:35.5300, lon:134.1666, elev:16 },
+  { code:"TAK", name:"高松",     en:"Takamatsu",   country:"日本", lat:34.2142, lon:134.0156, elev:185 },
+  { code:"TKS", name:"徳島",     en:"Tokushima",   country:"日本", lat:34.1328, lon:134.6066, elev:8 },
+  { code:"MYJ", name:"松山",     en:"Matsuyama",   country:"日本", lat:33.8272, lon:132.6997, elev:8 },
+  { code:"KCZ", name:"高知",     en:"Kochi",       country:"日本", lat:33.5461, lon:133.6694, elev:13 },
+  { code:"FUK", name:"福岡",     en:"Fukuoka",     country:"日本", lat:33.5859, lon:130.4506, elev:9 },
+  { code:"KKJ", name:"北九州",   en:"Kitakyushu",  country:"日本", lat:33.8459, lon:131.0350, elev:6 },
+  { code:"HSG", name:"佐賀",     en:"Saga",        country:"日本", lat:33.1497, lon:130.3022, elev:2 },
+  { code:"NGS", name:"長崎",     en:"Nagasaki",    country:"日本", lat:32.9169, lon:129.9136, elev:5 },
+  { code:"KMJ", name:"熊本",     en:"Kumamoto",    country:"日本", lat:32.8373, lon:130.8550, elev:196 },
+  { code:"OIT", name:"大分",     en:"Oita",        country:"日本", lat:33.4794, lon:131.7372, elev:6 },
+  { code:"KMI", name:"宮崎",     en:"Miyazaki",    country:"日本", lat:31.8772, lon:131.4486, elev:6 },
+  { code:"KOJ", name:"鹿児島",   en:"Kagoshima",   country:"日本", lat:31.8034, lon:130.7194, elev:272 },
+  { code:"OKA", name:"那覇",     en:"Naha",        country:"日本", lat:26.1958, lon:127.6458, elev:3 },
+  { code:"ISG", name:"新石垣",   en:"New Ishigaki",country:"日本", lat:24.3964, lon:124.2450, elev:30 },
+  { code:"MMY", name:"宮古",     en:"Miyako",      country:"日本", lat:24.7828, lon:125.2950, elev:45 },
+  { code:"ASJ", name:"奄美",     en:"Amami",       country:"日本", lat:28.4306, lon:129.7125, elev:8 },
+
+  // ===== アジア =====
+  { code:"ICN", name:"ソウル/仁川",   en:"Seoul Incheon",  country:"韓国",     lat:37.4602, lon:126.4407, elev:7 },
+  { code:"PEK", name:"北京/首都",     en:"Beijing Capital",country:"中国",     lat:40.0801, lon:116.5846, elev:35 },
+  { code:"PVG", name:"上海/浦東",     en:"Shanghai Pudong",country:"中国",     lat:31.1443, lon:121.8083, elev:4 },
+  { code:"CAN", name:"広州",          en:"Guangzhou",      country:"中国",     lat:23.3924, lon:113.2988, elev:15 },
+  { code:"KMG", name:"昆明/長水",     en:"Kunming",        country:"中国",     lat:25.1019, lon:102.9292, elev:2102 },
+  { code:"LXA", name:"ラサ/貢嘎",     en:"Lhasa Gonggar",  country:"中国",     lat:29.2978, lon:90.9119,  elev:3570 },
+  { code:"HKG", name:"香港",          en:"Hong Kong",      country:"香港",     lat:22.3080, lon:113.9185, elev:9 },
+  { code:"TPE", name:"台北/桃園",     en:"Taipei Taoyuan", country:"台湾",     lat:25.0777, lon:121.2328, elev:33 },
+  { code:"BKK", name:"バンコク/スワンナプーム",en:"Bangkok Suvarnabhumi",country:"タイ",lat:13.6900,lon:100.7501,elev:2 },
+  { code:"SIN", name:"シンガポール/チャンギ",en:"Singapore Changi",country:"シンガポール",lat:1.3644,lon:103.9915,elev:7 },
+  { code:"KUL", name:"クアラルンプール",en:"Kuala Lumpur",  country:"マレーシア",lat:2.7456, lon:101.7099, elev:21 },
+  { code:"CGK", name:"ジャカルタ",    en:"Jakarta",        country:"インドネシア",lat:-6.1256,lon:106.6559,elev:8 },
+  { code:"MNL", name:"マニラ",        en:"Manila",         country:"フィリピン",lat:14.5086, lon:121.0197, elev:23 },
+  { code:"DEL", name:"デリー",        en:"Delhi",          country:"インド",   lat:28.5562, lon:77.1000,  elev:237 },
+  { code:"BOM", name:"ムンバイ",      en:"Mumbai",         country:"インド",   lat:19.0887, lon:72.8679,  elev:11 },
+  { code:"KTM", name:"カトマンズ",    en:"Kathmandu",      country:"ネパール", lat:27.6966, lon:85.3591,  elev:1338 },
+  { code:"ULN", name:"ウランバートル",en:"Ulaanbaatar",    country:"モンゴル", lat:47.6431, lon:106.8200, elev:1316 },
+  { code:"TAS", name:"タシケント",    en:"Tashkent",       country:"ウズベキスタン",lat:41.2579,lon:69.2812,elev:417 },
+
+  // ===== 中東 =====
+  { code:"DXB", name:"ドバイ",        en:"Dubai",          country:"UAE",      lat:25.2532, lon:55.3657,  elev:19 },
+  { code:"DOH", name:"ドーハ/ハマド", en:"Doha Hamad",     country:"カタール", lat:25.2731, lon:51.6080,  elev:4 },
+  { code:"AUH", name:"アブダビ",      en:"Abu Dhabi",      country:"UAE",      lat:24.4330, lon:54.6511,  elev:27 },
+  { code:"RUH", name:"リヤド",        en:"Riyadh",         country:"サウジアラビア",lat:24.9576,lon:46.6988,elev:635 },
+  { code:"IKA", name:"テヘラン",      en:"Tehran",         country:"イラン",   lat:35.4161, lon:51.1522,  elev:1007 },
+  { code:"TLV", name:"テルアビブ",    en:"Tel Aviv",       country:"イスラエル",lat:32.0114, lon:34.8867,  elev:41 },
+  { code:"IST", name:"イスタンブール",en:"Istanbul",       country:"トルコ",   lat:41.2753, lon:28.7519,  elev:99 },
+
+  // ===== ヨーロッパ =====
+  { code:"LHR", name:"ロンドン/ヒースロー",en:"London Heathrow",country:"イギリス",lat:51.4700,lon:-0.4543,elev:25 },
+  { code:"CDG", name:"パリ/シャルル・ド・ゴール",en:"Paris CDG",country:"フランス",lat:49.0097,lon:2.5479,elev:119 },
+  { code:"AMS", name:"アムステルダム",en:"Amsterdam Schiphol",country:"オランダ",lat:52.3105,lon:4.7683,elev:-3 },
+  { code:"FRA", name:"フランクフルト",en:"Frankfurt",      country:"ドイツ",   lat:50.0379, lon:8.5622,   elev:111 },
+  { code:"MUC", name:"ミュンヘン",    en:"Munich",         country:"ドイツ",   lat:48.3538, lon:11.7861,  elev:448 },
+  { code:"MAD", name:"マドリード",    en:"Madrid",         country:"スペイン", lat:40.4719, lon:-3.5626,  elev:610 },
+  { code:"BCN", name:"バルセロナ",    en:"Barcelona",      country:"スペイン", lat:41.2974, lon:2.0833,   elev:4 },
+  { code:"FCO", name:"ローマ/フィウミチーノ",en:"Rome Fiumicino",country:"イタリア",lat:41.8003,lon:12.2389,elev:13 },
+  { code:"ZRH", name:"チューリッヒ",  en:"Zurich",         country:"スイス",   lat:47.4647, lon:8.5492,   elev:432 },
+  { code:"GVA", name:"ジュネーブ",    en:"Geneva",         country:"スイス",   lat:46.2381, lon:6.1090,   elev:430 },
+  { code:"VIE", name:"ウィーン",      en:"Vienna",         country:"オーストリア",lat:48.1103,lon:16.5697,elev:183 },
+  { code:"OSL", name:"オスロ",        en:"Oslo",           country:"ノルウェー",lat:60.1939, lon:11.1004,  elev:208 },
+  { code:"ARN", name:"ストックホルム",en:"Stockholm Arlanda",country:"スウェーデン",lat:59.6519,lon:17.9186,elev:42 },
+  { code:"LIS", name:"リスボン",      en:"Lisbon",         country:"ポルトガル",lat:38.7742, lon:-9.1342,  elev:114 },
+  { code:"ATH", name:"アテネ",        en:"Athens",         country:"ギリシャ", lat:37.9364, lon:23.9445,  elev:94 },
+  { code:"SVO", name:"モスクワ/シェレメーチエヴォ",en:"Moscow Sheremetyevo",country:"ロシア",lat:55.9726,lon:37.4146,elev:190 },
+
+  // ===== アフリカ =====
+  { code:"CAI", name:"カイロ",        en:"Cairo",          country:"エジプト", lat:30.1219, lon:31.4056,  elev:116 },
+  { code:"JNB", name:"ヨハネスブルグ",en:"Johannesburg",   country:"南アフリカ",lat:-26.1392,lon:28.2460,  elev:1694 },
+  { code:"CPT", name:"ケープタウン",  en:"Cape Town",      country:"南アフリカ",lat:-33.9690,lon:18.5970,  elev:46 },
+  { code:"ADD", name:"アディスアベバ",en:"Addis Ababa",    country:"エチオピア",lat:8.9779,  lon:38.7993,  elev:2334 },
+  { code:"NBO", name:"ナイロビ",      en:"Nairobi",        country:"ケニア",   lat:-1.3192, lon:36.9278,  elev:1624 },
+  { code:"LOS", name:"ラゴス",        en:"Lagos",          country:"ナイジェリア",lat:6.5774,lon:3.3212,   elev:41 },
+  { code:"CMN", name:"カサブランカ",  en:"Casablanca",     country:"モロッコ", lat:33.3675, lon:-7.5899,  elev:200 },
+
+  // ===== 北アメリカ =====
+  { code:"JFK", name:"ニューヨーク/JFK",en:"New York JFK", country:"アメリカ", lat:40.6413, lon:-73.7781, elev:4 },
+  { code:"LAX", name:"ロサンゼルス",  en:"Los Angeles",    country:"アメリカ", lat:33.9416, lon:-118.4085,elev:38 },
+  { code:"ORD", name:"シカゴ/オヘア", en:"Chicago O'Hare", country:"アメリカ", lat:41.9742, lon:-87.9073, elev:204 },
+  { code:"DFW", name:"ダラス",        en:"Dallas Fort Worth",country:"アメリカ",lat:32.8998,lon:-97.0403,elev:184 },
+  { code:"DEN", name:"デンバー",      en:"Denver",         country:"アメリカ", lat:39.8561, lon:-104.6737,elev:1655 },
+  { code:"ATL", name:"アトランタ",    en:"Atlanta",        country:"アメリカ", lat:33.6407, lon:-84.4277, elev:313 },
+  { code:"SFO", name:"サンフランシスコ",en:"San Francisco",country:"アメリカ", lat:37.6213, lon:-122.3790,elev:4 },
+  { code:"SEA", name:"シアトル",      en:"Seattle",        country:"アメリカ", lat:47.4502, lon:-122.3088,elev:132 },
+  { code:"MIA", name:"マイアミ",      en:"Miami",          country:"アメリカ", lat:25.7959, lon:-80.2870, elev:2 },
+  { code:"YYZ", name:"トロント",      en:"Toronto Pearson",country:"カナダ",   lat:43.6777, lon:-79.6248, elev:173 },
+  { code:"YVR", name:"バンクーバー",  en:"Vancouver",      country:"カナダ",   lat:49.1967, lon:-123.1815,elev:4 },
+  { code:"MEX", name:"メキシコシティ",en:"Mexico City",    country:"メキシコ", lat:19.4363, lon:-99.0721, elev:2230 },
+  { code:"CUN", name:"カンクン",      en:"Cancun",         country:"メキシコ", lat:21.0365, lon:-86.8771, elev:6 },
+
+  // ===== 南アメリカ =====
+  { code:"GRU", name:"サンパウロ",    en:"Sao Paulo",      country:"ブラジル", lat:-23.4356,lon:-46.4731, elev:750 },
+  { code:"EZE", name:"ブエノスアイレス",en:"Buenos Aires", country:"アルゼンチン",lat:-34.8222,lon:-58.5358,elev:20 },
+  { code:"BOG", name:"ボゴタ",        en:"Bogota",         country:"コロンビア",lat:4.7016,  lon:-74.1469, elev:2548 },
+  { code:"LIM", name:"リマ",          en:"Lima",           country:"ペルー",   lat:-12.0219,lon:-77.1143, elev:34 },
+  { code:"SCL", name:"サンティアゴ",  en:"Santiago",       country:"チリ",     lat:-33.3930,lon:-70.7858, elev:474 },
+  { code:"UIO", name:"キト",          en:"Quito",          country:"エクアドル",lat:-0.1292, lon:-78.3575, elev:2400 },
+  { code:"LPB", name:"ラパス/エルアルト",en:"La Paz El Alto",country:"ボリビア",lat:-16.5133,lon:-68.1925,elev:4061 },
+  { code:"CUZ", name:"クスコ",        en:"Cusco",          country:"ペルー",   lat:-13.5357,lon:-71.9388, elev:3311 },
+
+  // ===== オセアニア =====
+  { code:"SYD", name:"シドニー",      en:"Sydney",         country:"オーストラリア",lat:-33.9461,lon:151.1772,elev:6 },
+  { code:"MEL", name:"メルボルン",    en:"Melbourne",      country:"オーストラリア",lat:-37.6690,lon:144.8410,elev:132 },
+  { code:"BNE", name:"ブリスベン",    en:"Brisbane",       country:"オーストラリア",lat:-27.3842,lon:153.1175,elev:4 },
+  { code:"PER", name:"パース",        en:"Perth",          country:"オーストラリア",lat:-31.9403,lon:115.9669,elev:20 },
+  { code:"AKL", name:"オークランド",  en:"Auckland",       country:"ニュージーランド",lat:-37.0082,lon:174.7850,elev:7 },
+  { code:"NAN", name:"ナンディ",      en:"Nadi",           country:"フィジー", lat:-17.7554,lon:177.4434, elev:18 },
+];
+
+/* 標高 → 色（凡例と対応） */
+function elevColor(e) {
+  if (e < 10)   return [0, 80, 210];
+  if (e < 50)   return [0, 140, 230];
+  if (e < 150)  return [0, 200, 200];
+  if (e < 400)  return [0, 200, 100];
+  if (e < 800)  return [150, 210, 0];
+  if (e < 1500) return [240, 200, 0];
+  if (e < 2500) return [245, 140, 0];
+  if (e < 3500) return [235, 60, 20];
+  return [220, 30, 120];
+}
+
+/* 視点プリセット */
+const VIEWS = {
+  world: { center: [40, 25], zoom: 1.3, pitch: 40, bearing: 0 },
+  japan: { center: [137.5, 37.5], zoom: 4.4, pitch: 55, bearing: -10 },
+};
+
+/* 地図 */
+const map = new maplibregl.Map({
+  container: "map",
+  style: "https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json",
+  ...VIEWS.world,
+  antialias: true,
+});
+map.addControl(new maplibregl.NavigationControl({ visualizePitch: true }), "bottom-right");
+
+let exaggeration = 200;
+
+function makeLayer() {
+  return new deck.ColumnLayer({
+    id: "airport-columns",
+    data: AIRPORTS,
+    diskResolution: 12,
+    radius: 14000,                // 棒の太さ（メートル）
+    radiusUnits: "meters",
+    extruded: true,
+    pickable: true,
+    elevationScale: exaggeration, // 高さの強調
+    getPosition: d => [d.lon, d.lat],
+    getElevation: d => d.elev,
+    getFillColor: d => elevColor(d.elev),
+    material: { ambient: 0.6, diffuse: 0.6, shininess: 32, specularColor: [255,255,255] },
+    onClick: info => { if (info.object) showPanel(info.object); },
+    updateTriggers: { getElevation: exaggeration },
+  });
+}
+
+const overlay = new deck.MapboxOverlay({
+  interleaved: true,
+  layers: [makeLayer()],
+  getTooltip: ({ object }) =>
+    object && {
+      html: `<div style="font-weight:700;margin-bottom:2px">${object.name} (${object.code})</div>
+             <div style="color:#9fb3d1;margin-bottom:2px">${object.country}</div>
+             <div>標高 <b style="color:#ffd36b">${object.elev} m</b></div>`,
+      style: {
+        background: "rgba(10,16,32,.95)", color: "#fff",
+        padding: "8px 10px", borderRadius: "8px",
+        border: "1px solid rgba(255,255,255,.2)", fontSize: "12px",
+      },
+    },
+});
+
+map.on("load", () => { map.addControl(overlay); });
+
+/* 強調スライダー */
+const exInput = document.getElementById("exaggerate");
+const exVal = document.getElementById("exVal");
+exInput.addEventListener("input", e => {
+  exaggeration = +e.target.value;
+  exVal.textContent = "×" + exaggeration;
+  overlay.setProps({ layers: [makeLayer()] });
+});
+
+/* 視点ボタン */
+document.getElementById("btn-world").addEventListener("click", () => map.flyTo({ ...VIEWS.world, duration: 1500 }));
+document.getElementById("btn-japan").addEventListener("click", () => map.flyTo({ ...VIEWS.japan, duration: 1500 }));
+
+/* 詳細パネル */
+const panel = document.getElementById("panel");
+function showPanel(a) {
+  document.getElementById("p-code").textContent = a.code;
+  document.getElementById("p-name").textContent = a.name;
+  document.getElementById("p-elev").textContent = a.elev;
+  document.getElementById("p-en").textContent = a.en;
+  document.getElementById("p-country").textContent = a.country;
+  document.getElementById("p-lat").textContent = a.lat.toFixed(4);
+  document.getElementById("p-lon").textContent = a.lon.toFixed(4);
+  panel.classList.add("show");
+}
+function hidePanel() { panel.classList.remove("show"); }
+</script>
+</body>
+</html>
