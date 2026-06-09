@@ -1,0 +1,493 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+<title>世界のリアルタイム天気 3Dマップ</title>
+
+<link href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css" rel="stylesheet" />
+<script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+<script src="https://unpkg.com/deck.gl@9.0.38/dist.min.js"></script>
+
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  html, body { margin:0; height:100%; font-family:"Hiragino Kaku Gothic ProN","Yu Gothic","Meiryo",system-ui,sans-serif; }
+  #map { position:absolute; inset:0; background:#0b1020; }
+
+  .card {
+    position:absolute; z-index:5; color:#fff;
+    background:rgba(10,16,32,.78); border:1px solid rgba(255,255,255,.12);
+    border-radius:12px; backdrop-filter:blur(6px); padding:10px 14px;
+  }
+  #title { top:14px; left:14px; max-width:340px; }
+  #title h1 { margin:0 0 4px; font-size:16px; }
+  #title p { margin:0; font-size:11px; color:#9fb3d1; line-height:1.5; }
+  #title .updated { margin-top:6px; color:#ffd36b; font-size:11px; }
+
+  #controls { top:14px; right:14px; width:220px; font-size:12px; }
+  #controls label { display:block; margin-bottom:6px; color:#cfe0f7; }
+  #controls input[type=range] { width:100%; }
+  #exVal { color:#ffd36b; font-variant-numeric:tabular-nums; }
+  #controls .btns { display:flex; gap:6px; margin-top:10px; }
+  #controls button {
+    flex:1; padding:6px; cursor:pointer; font-size:12px;
+    color:#fff; background:rgba(255,255,255,.08);
+    border:1px solid rgba(255,255,255,.18); border-radius:8px;
+  }
+  #controls button:hover { background:rgba(255,255,255,.16); }
+  #reload { margin-top:8px; width:100%; padding:7px; cursor:pointer; font-size:12px;
+    color:#0b1020; background:#ffd36b; border:0; border-radius:8px; font-weight:700; }
+  #reload:disabled { opacity:.5; cursor:wait; }
+
+  #legend { bottom:16px; left:14px; font-size:11px; }
+  #legend b { display:block; margin-bottom:6px; color:#cfe0f7; }
+  .legrow { display:flex; align-items:center; gap:8px; margin:3px 0; }
+  .swatch { width:16px; height:10px; border-radius:2px; }
+
+  #panel {
+    right:14px; bottom:16px; width:290px; padding:16px;
+    background:rgba(10,16,32,.94); border:1px solid rgba(255,255,255,.15);
+    border-radius:14px; backdrop-filter:blur(8px);
+    transform:translateY(160%); transition:transform .25s ease;
+    box-shadow:0 10px 40px rgba(0,0,0,.5);
+  }
+  #panel.show { transform:translateY(0); }
+  #panel .code { font-size:11px; color:#9fb3d1; letter-spacing:.08em; }
+  #panel h2 { margin:2px 0 4px; font-size:18px; }
+  #panel .country { color:#9fb3d1; font-size:12px; margin-bottom:10px; }
+  #panel .hero { display:flex; align-items:center; gap:12px; margin:8px 0; }
+  #panel .icon { font-size:48px; line-height:1; }
+  #panel .temp { font-size:36px; font-weight:700; }
+  #panel .temp small { font-size:14px; color:#9fb3d1; font-weight:400; }
+  #panel .cond { color:#cfe0f7; font-size:13px; margin-bottom:8px; }
+  #panel .row { display:flex; justify-content:space-between; font-size:12px; color:#cfe0f7; margin:5px 0; }
+  #panel .close { position:absolute; top:10px; right:12px; cursor:pointer; color:#9fb3d1; font-size:18px; }
+  #panel .close:hover { color:#fff; }
+
+  #loading {
+    position:absolute; inset:0; z-index:10; display:flex; align-items:center; justify-content:center;
+    background:rgba(5,8,20,.7); color:#fff; font-size:14px; transition:opacity .3s;
+  }
+  #loading.hide { opacity:0; pointer-events:none; }
+  .spinner {
+    width:42px; height:42px; border:3px solid rgba(255,255,255,.15);
+    border-top-color:#ffd36b; border-radius:50%; animation:spin 0.9s linear infinite;
+    margin-right:14px;
+  }
+  @keyframes spin { to { transform:rotate(360deg); } }
+</style>
+</head>
+<body>
+<div id="map"></div>
+
+<div id="title" class="card">
+  <h1>🌦️ 世界のリアルタイム天気 3Dマップ</h1>
+  <p>棒の<b>高さ＝気温</b>。色も気温に対応。アイコンは現在の天気。<br>棒にカーソルを乗せる／タップで詳細。</p>
+  <div class="updated" id="updated">取得中…</div>
+</div>
+
+<div id="controls" class="card">
+  <label>高さの強調 <span id="exVal">×200</span></label>
+  <input id="exaggerate" type="range" min="50" max="1000" step="50" value="200" />
+  <div class="btns">
+    <button id="btn-world">🌐 世界</button>
+    <button id="btn-japan">🗾 日本</button>
+  </div>
+  <button id="reload">🔄 最新の天気を取得</button>
+  <a href="index.html" style="display:block;margin-top:8px;padding:8px;text-align:center;cursor:pointer;font-size:12px;color:#fff;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.18);border-radius:8px;text-decoration:none">🏔️ 標高マップへ</a>
+</div>
+
+<div id="legend" class="card">
+  <b>標高（m）</b>
+  <div class="legrow"><span class="swatch" style="background:rgb(0,80,210)"></span>0–10</div>
+  <div class="legrow"><span class="swatch" style="background:rgb(0,140,230)"></span>10–50</div>
+  <div class="legrow"><span class="swatch" style="background:rgb(0,200,200)"></span>50–150</div>
+  <div class="legrow"><span class="swatch" style="background:rgb(0,200,100)"></span>150–400</div>
+  <div class="legrow"><span class="swatch" style="background:rgb(150,210,0)"></span>400–800</div>
+  <div class="legrow"><span class="swatch" style="background:rgb(240,200,0)"></span>800–1500</div>
+  <div class="legrow"><span class="swatch" style="background:rgb(245,140,0)"></span>1500–2500</div>
+  <div class="legrow"><span class="swatch" style="background:rgb(235,60,20)"></span>2500–3500</div>
+  <div class="legrow"><span class="swatch" style="background:rgb(220,30,120)"></span>3500以上</div>
+</div>
+
+<div id="panel" class="card">
+  <span class="close" onclick="hidePanel()">✕</span>
+  <div class="code" id="p-code"></div>
+  <h2 id="p-name"></h2>
+  <div class="country" id="p-country"></div>
+  <div class="hero">
+    <div class="icon" id="p-icon">⛅</div>
+    <div>
+      <div class="temp"><span id="p-temp">--</span><small> °C</small></div>
+      <div class="cond" id="p-cond">--</div>
+    </div>
+  </div>
+  <div class="row"><span>体感気温</span><span id="p-feel">-- °C</span></div>
+  <div class="row"><span>湿度</span><span id="p-hum">-- %</span></div>
+  <div class="row"><span>風速</span><span id="p-wind">-- km/h</span></div>
+  <div class="row"><span>降水量(直近1h)</span><span id="p-precip">-- mm</span></div>
+  <div class="row"><span>現地時刻</span><span id="p-time">--</span></div>
+</div>
+
+<div id="loading"><div class="spinner"></div>世界中の現在の天気を取得しています…</div>
+
+<script>
+/* ============================================================
+   地点データ（空港）。世界の主要空港 + 日本の主要空港。
+   weather.html では「観測ポイント」として使います。
+   ============================================================ */
+const POINTS = [
+  // 日本
+  { code:"CTS", name:"新千歳",   country:"日本", lat:42.7752, lon:141.6923, elev:25 },
+  { code:"HKD", name:"函館",     country:"日本", lat:41.7700, lon:140.8219, elev:34 },
+  { code:"AOJ", name:"青森",     country:"日本", lat:40.7347, lon:140.6906, elev:198 },
+  { code:"AXT", name:"秋田",     country:"日本", lat:39.6156, lon:140.2186, elev:96 },
+  { code:"SDJ", name:"仙台",     country:"日本", lat:38.1397, lon:140.9169, elev:5 },
+  { code:"KIJ", name:"新潟",     country:"日本", lat:37.9558, lon:139.1206, elev:3 },
+  { code:"HND", name:"東京",     country:"日本", lat:35.5494, lon:139.7798, elev:6 },
+  { code:"NGO", name:"名古屋",   country:"日本", lat:34.8584, lon:136.8054, elev:4 },
+  { code:"KIX", name:"大阪",     country:"日本", lat:34.4347, lon:135.2440, elev:8 },
+  { code:"HIJ", name:"広島",     country:"日本", lat:34.4361, lon:132.9194, elev:331 },
+  { code:"TAK", name:"高松",     country:"日本", lat:34.2142, lon:134.0156, elev:185 },
+  { code:"MYJ", name:"松山",     country:"日本", lat:33.8272, lon:132.6997, elev:8 },
+  { code:"FUK", name:"福岡",     country:"日本", lat:33.5859, lon:130.4506, elev:9 },
+  { code:"KOJ", name:"鹿児島",   country:"日本", lat:31.8034, lon:130.7194, elev:272 },
+  { code:"OKA", name:"那覇",     country:"日本", lat:26.1958, lon:127.6458, elev:3 },
+  { code:"ISG", name:"石垣",     country:"日本", lat:24.3964, lon:124.2450, elev:30 },
+  // アジア
+  { code:"ICN", name:"ソウル",   country:"韓国",   lat:37.4602, lon:126.4407, elev:7 },
+  { code:"PEK", name:"北京",     country:"中国",   lat:39.9042, lon:116.4074, elev:35 },
+  { code:"PVG", name:"上海",     country:"中国",   lat:31.2304, lon:121.4737, elev:4 },
+  { code:"CAN", name:"広州",     country:"中国",   lat:23.1291, lon:113.2644, elev:15 },
+  { code:"LXA", name:"ラサ",     country:"中国",   lat:29.6500, lon:91.1000,  elev:3570 },
+  { code:"HKG", name:"香港",     country:"香港",   lat:22.3193, lon:114.1694, elev:9 },
+  { code:"TPE", name:"台北",     country:"台湾",   lat:25.0330, lon:121.5654, elev:33 },
+  { code:"BKK", name:"バンコク", country:"タイ",   lat:13.7563, lon:100.5018, elev:2 },
+  { code:"SIN", name:"シンガポール",country:"シンガポール",lat:1.3521,lon:103.8198, elev:7 },
+  { code:"KUL", name:"クアラルンプール",country:"マレーシア",lat:3.1390,lon:101.6869, elev:21 },
+  { code:"CGK", name:"ジャカルタ",country:"インドネシア",lat:-6.2088,lon:106.8456, elev:8 },
+  { code:"MNL", name:"マニラ",   country:"フィリピン",lat:14.5995,lon:120.9842, elev:23 },
+  { code:"DEL", name:"デリー",   country:"インド", lat:28.7041, lon:77.1025,  elev:237 },
+  { code:"BOM", name:"ムンバイ", country:"インド", lat:19.0760, lon:72.8777,  elev:11 },
+  { code:"KTM", name:"カトマンズ",country:"ネパール",lat:27.7172,lon:85.3240, elev:1338 },
+  { code:"ULN", name:"ウランバートル",country:"モンゴル",lat:47.8864,lon:106.9057, elev:1316 },
+  // 中東
+  { code:"DXB", name:"ドバイ",   country:"UAE",    lat:25.2048, lon:55.2708,  elev:19 },
+  { code:"DOH", name:"ドーハ",   country:"カタール",lat:25.2854, lon:51.5310, elev:4 },
+  { code:"RUH", name:"リヤド",   country:"サウジ", lat:24.7136, lon:46.6753,  elev:635 },
+  { code:"IKA", name:"テヘラン", country:"イラン", lat:35.6892, lon:51.3890,  elev:1007 },
+  { code:"IST", name:"イスタンブール",country:"トルコ",lat:41.0082,lon:28.9784, elev:99 },
+  // ヨーロッパ
+  { code:"LHR", name:"ロンドン", country:"イギリス",lat:51.5074,lon:-0.1278, elev:25 },
+  { code:"CDG", name:"パリ",     country:"フランス",lat:48.8566,lon:2.3522,   elev:119 },
+  { code:"AMS", name:"アムステルダム",country:"オランダ",lat:52.3676,lon:4.9041, elev:-3 },
+  { code:"FRA", name:"フランクフルト",country:"ドイツ",lat:50.1109,lon:8.6821, elev:111 },
+  { code:"MUC", name:"ミュンヘン",country:"ドイツ", lat:48.1351, lon:11.5820,  elev:448 },
+  { code:"MAD", name:"マドリード",country:"スペイン",lat:40.4168,lon:-3.7038, elev:610 },
+  { code:"BCN", name:"バルセロナ",country:"スペイン",lat:41.3851,lon:2.1734,  elev:4 },
+  { code:"FCO", name:"ローマ",   country:"イタリア",lat:41.9028,lon:12.4964,  elev:13 },
+  { code:"ZRH", name:"チューリッヒ",country:"スイス",lat:47.3769,lon:8.5417,   elev:432 },
+  { code:"VIE", name:"ウィーン", country:"オーストリア",lat:48.2082,lon:16.3738, elev:183 },
+  { code:"OSL", name:"オスロ",   country:"ノルウェー",lat:59.9139,lon:10.7522,  elev:208 },
+  { code:"ARN", name:"ストックホルム",country:"スウェーデン",lat:59.3293,lon:18.0686, elev:42 },
+  { code:"LIS", name:"リスボン", country:"ポルトガル",lat:38.7223,lon:-9.1393, elev:114 },
+  { code:"ATH", name:"アテネ",   country:"ギリシャ",lat:37.9838,lon:23.7275,   elev:94 },
+  { code:"SVO", name:"モスクワ", country:"ロシア", lat:55.7558, lon:37.6173,  elev:190 },
+  // アフリカ
+  { code:"CAI", name:"カイロ",   country:"エジプト",lat:30.0444,lon:31.2357,  elev:116 },
+  { code:"JNB", name:"ヨハネスブルグ",country:"南アフリカ",lat:-26.2041,lon:28.0473, elev:1694 },
+  { code:"CPT", name:"ケープタウン",country:"南アフリカ",lat:-33.9249,lon:18.4241, elev:46 },
+  { code:"ADD", name:"アディスアベバ",country:"エチオピア",lat:9.0320,lon:38.7469, elev:2334 },
+  { code:"NBO", name:"ナイロビ", country:"ケニア", lat:-1.2921, lon:36.8219,  elev:1624 },
+  { code:"LOS", name:"ラゴス",   country:"ナイジェリア",lat:6.5244,lon:3.3792, elev:41 },
+  { code:"CMN", name:"カサブランカ",country:"モロッコ",lat:33.5731,lon:-7.5898, elev:200 },
+  // 北米
+  { code:"JFK", name:"ニューヨーク",country:"アメリカ",lat:40.7128,lon:-74.0060, elev:4 },
+  { code:"LAX", name:"ロサンゼルス",country:"アメリカ",lat:34.0522,lon:-118.2437, elev:38 },
+  { code:"ORD", name:"シカゴ",   country:"アメリカ",lat:41.8781,lon:-87.6298,  elev:204 },
+  { code:"DEN", name:"デンバー", country:"アメリカ",lat:39.7392,lon:-104.9903, elev:1655 },
+  { code:"ATL", name:"アトランタ",country:"アメリカ",lat:33.7490,lon:-84.3880, elev:313 },
+  { code:"SFO", name:"サンフランシスコ",country:"アメリカ",lat:37.7749,lon:-122.4194, elev:4 },
+  { code:"SEA", name:"シアトル", country:"アメリカ",lat:47.6062,lon:-122.3321, elev:132 },
+  { code:"MIA", name:"マイアミ", country:"アメリカ",lat:25.7617,lon:-80.1918,  elev:2 },
+  { code:"YYZ", name:"トロント", country:"カナダ", lat:43.6532, lon:-79.3832,  elev:173 },
+  { code:"YVR", name:"バンクーバー",country:"カナダ",lat:49.2827,lon:-123.1207, elev:4 },
+  { code:"ANC", name:"アンカレッジ",country:"アメリカ",lat:61.2181,lon:-149.9003, elev:46 },
+  { code:"MEX", name:"メキシコシティ",country:"メキシコ",lat:19.4326,lon:-99.1332, elev:2230 },
+  // 南米
+  { code:"GRU", name:"サンパウロ",country:"ブラジル",lat:-23.5505,lon:-46.6333, elev:750 },
+  { code:"EZE", name:"ブエノスアイレス",country:"アルゼンチン",lat:-34.6037,lon:-58.3816, elev:20 },
+  { code:"BOG", name:"ボゴタ",   country:"コロンビア",lat:4.7110,lon:-74.0721, elev:2548 },
+  { code:"LIM", name:"リマ",     country:"ペルー", lat:-12.0464,lon:-77.0428, elev:34 },
+  { code:"SCL", name:"サンティアゴ",country:"チリ",lat:-33.4489,lon:-70.6693, elev:474 },
+  { code:"LPB", name:"ラパス",   country:"ボリビア",lat:-16.5000,lon:-68.1193, elev:4061 },
+  // オセアニア
+  { code:"SYD", name:"シドニー", country:"オーストラリア",lat:-33.8688,lon:151.2093, elev:6 },
+  { code:"MEL", name:"メルボルン",country:"オーストラリア",lat:-37.8136,lon:144.9631, elev:132 },
+  { code:"PER", name:"パース",   country:"オーストラリア",lat:-31.9505,lon:115.8605, elev:20 },
+  { code:"AKL", name:"オークランド",country:"NZ",   lat:-36.8485, lon:174.7633, elev:7 },
+  // 極地
+  { code:"REK", name:"レイキャビク",country:"アイスランド",lat:64.1466,lon:-21.9426, elev:48 },
+  { code:"LYR", name:"ロングイェールビーン",country:"スバールバル",lat:78.2232,lon:15.6267, elev:28 },
+];
+
+/* WMO天気コード → 絵文字 + 説明 */
+const WMO = {
+  0:  { icon:"☀️", text:"快晴" },
+  1:  { icon:"🌤️", text:"おおむね晴れ" },
+  2:  { icon:"⛅", text:"晴れ時々曇り" },
+  3:  { icon:"☁️", text:"曇り" },
+  45: { icon:"🌫️", text:"霧" },
+  48: { icon:"🌫️", text:"着氷性の霧" },
+  51: { icon:"🌦️", text:"弱い霧雨" },
+  53: { icon:"🌦️", text:"霧雨" },
+  55: { icon:"🌧️", text:"強い霧雨" },
+  56: { icon:"🌧️", text:"弱い着氷性霧雨" },
+  57: { icon:"🌧️", text:"着氷性霧雨" },
+  61: { icon:"🌧️", text:"弱い雨" },
+  63: { icon:"🌧️", text:"雨" },
+  65: { icon:"🌧️", text:"強い雨" },
+  66: { icon:"🌧️", text:"弱い着氷性雨" },
+  67: { icon:"🌧️", text:"着氷性雨" },
+  71: { icon:"🌨️", text:"弱い雪" },
+  73: { icon:"🌨️", text:"雪" },
+  75: { icon:"❄️", text:"強い雪" },
+  77: { icon:"❄️", text:"雪粒" },
+  80: { icon:"🌦️", text:"弱いにわか雨" },
+  81: { icon:"🌧️", text:"にわか雨" },
+  82: { icon:"⛈️", text:"激しいにわか雨" },
+  85: { icon:"🌨️", text:"弱いにわか雪" },
+  86: { icon:"❄️", text:"激しいにわか雪" },
+  95: { icon:"⛈️", text:"雷雨" },
+  96: { icon:"⛈️", text:"雷雨(雹を伴う)" },
+  99: { icon:"⛈️", text:"激しい雷雨(雹)" },
+};
+const wmoOf = c => WMO[c] || { icon:"❓", text:"不明" };
+
+/* 絵文字をCanvasで画像化（IconLayer 用） */
+const ICON_CACHE = {};
+function emojiIcon(emoji) {
+  if (ICON_CACHE[emoji]) return ICON_CACHE[emoji];
+  const size = 96;
+  const cv = document.createElement("canvas");
+  cv.width = cv.height = size;
+  const g = cv.getContext("2d");
+  g.font = "72px 'Apple Color Emoji','Segoe UI Emoji','Noto Color Emoji',sans-serif";
+  g.textAlign = "center";
+  g.textBaseline = "middle";
+  g.fillText(emoji, size/2, size/2 + 4);
+  const url = cv.toDataURL();
+  ICON_CACHE[emoji] = { url, width:size, height:size };
+  return ICON_CACHE[emoji];
+}
+
+/* 標高 → 色（index.html と同じ配色） */
+function elevColor(e) {
+  if (e < 10)   return [0, 80, 210];
+  if (e < 50)   return [0, 140, 230];
+  if (e < 150)  return [0, 200, 200];
+  if (e < 400)  return [0, 200, 100];
+  if (e < 800)  return [150, 210, 0];
+  if (e < 1500) return [240, 200, 0];
+  if (e < 2500) return [245, 140, 0];
+  if (e < 3500) return [235, 60, 20];
+  return [220, 30, 120];
+}
+
+/* 視点 */
+const VIEWS = {
+  world: { center:[40,25], zoom:1.3, pitch:40, bearing:0 },
+  japan: { center:[137.5,37.5], zoom:4.4, pitch:55, bearing:-10 },
+};
+
+const map = new maplibregl.Map({
+  container:"map",
+  style:"https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json",
+  ...VIEWS.world,
+  antialias:true,
+});
+map.addControl(new maplibregl.NavigationControl({ visualizePitch:true }), "bottom-right");
+
+let exaggeration = 200;
+let animPhase = 0;            // アイコンふわふわ用
+let data = POINTS.map(p => ({ ...p, t:null, code_wx:null }));  // 後で天気を埋める
+
+function makeLayers() {
+  return [
+    new deck.ColumnLayer({
+      id:"weather-columns",
+      data,
+      diskResolution:12,
+      radius:14000,
+      radiusUnits:"meters",
+      extruded:true,
+      pickable:true,
+      elevationScale:exaggeration,
+      getPosition:d => [d.lon, d.lat],
+      getElevation:d => d.elev,
+      getFillColor:d => elevColor(d.elev),
+      material:{ ambient:0.6, diffuse:0.6, shininess:32, specularColor:[255,255,255] },
+      onClick:info => { if (info.object) showPanel(info.object); },
+      updateTriggers:{ getElevation:[exaggeration] },
+    }),
+    new deck.IconLayer({
+      id:"weather-icons",
+      data:data.filter(d => d.t != null),
+      pickable:true,
+      billboard:true,
+      sizeUnits:"pixels",
+      getSize:36,
+      // 棒のてっぺん（標高ベース）
+      getPosition:d => [d.lon, d.lat, d.elev * exaggeration],
+      // 絵文字を画像化したものを使う
+      getIcon:d => emojiIcon(wmoOf(d.code_wx).icon),
+      // 棒の右横にずらしつつ、sin波でふわふわ
+      getPixelOffset:d => {
+        const phase = (d.lat + d.lon) * 0.3;
+        const dy = Math.sin(animPhase + phase) * 6;
+        const dx = Math.cos(animPhase * 0.7 + phase) * 2;
+        return [30 + dx, -20 + dy];
+      },
+      onClick:info => { if (info.object) showPanel(info.object); },
+      updateTriggers:{
+        getPosition:[exaggeration, data],
+        getPixelOffset:animPhase,
+        getIcon:data,
+      },
+    }),
+    new deck.TextLayer({
+      id:"weather-temps",
+      data:data.filter(d => d.t != null),
+      getPosition:d => [d.lon, d.lat, d.elev * exaggeration],
+      getText:d => `${Math.round(d.t)}°`,
+      getSize:14,
+      sizeUnits:"pixels",
+      getColor:[255,255,255],
+      getPixelOffset:[30, 6],  // アイコンの下
+      outlineColor:[0,0,0],
+      outlineWidth:3,
+      fontSettings:{ sdf:true },
+      billboard:true,
+      characterSet:"0123456789-°",
+      updateTriggers:{ getPosition:[exaggeration, data], getText:data },
+    }),
+  ];
+}
+
+const overlay = new deck.MapboxOverlay({
+  interleaved:true,
+  layers:makeLayers(),
+  getTooltip:({ object }) => {
+    if (!object) return null;
+    const w = object.code_wx != null ? wmoOf(object.code_wx) : { icon:"…", text:"取得中" };
+    const t = object.t != null ? `${object.t.toFixed(1)} °C` : "…";
+    return {
+      html:`<div style="font-weight:700;margin-bottom:2px">${object.name} (${object.code})</div>
+            <div style="color:#9fb3d1;margin-bottom:4px">${object.country}</div>
+            <div style="font-size:18px">${w.icon} <b style="color:#ffd36b">${t}</b></div>
+            <div style="color:#cfe0f7;font-size:11px">${w.text}</div>`,
+      style:{ background:"rgba(10,16,32,.95)", color:"#fff", padding:"8px 10px",
+              borderRadius:"8px", border:"1px solid rgba(255,255,255,.2)", fontSize:"12px" },
+    };
+  },
+});
+map.on("load", () => { map.addControl(overlay); fetchWeather(); startAnim(); });
+
+function refresh() { overlay.setProps({ layers: makeLayers() }); }
+
+/* アイコンふわふわアニメーション（約30fps） */
+function startAnim() {
+  let last = 0;
+  function tick(now) {
+    if (now - last > 33) {                 // ~30fps
+      animPhase = now / 600;               // ゆっくり進む位相
+      overlay.setProps({ layers: makeLayers() });
+      last = now;
+    }
+    requestAnimationFrame(tick);
+  }
+  requestAnimationFrame(tick);
+}
+
+/* ============================================================
+   Open-Meteo から現在の天気をまとめて取得
+   - 1回のリクエストで複数地点OK（lat=...,...&lon=...,...）
+   - 念のため50地点ずつ分割
+   ============================================================ */
+async function fetchWeather() {
+  const reload = document.getElementById("reload");
+  reload.disabled = true;
+  document.getElementById("loading").classList.remove("hide");
+  document.getElementById("updated").textContent = "取得中…";
+
+  const CHUNK = 50;
+  try {
+    for (let i = 0; i < data.length; i += CHUNK) {
+      const slice = data.slice(i, i + CHUNK);
+      const lats = slice.map(p => p.lat.toFixed(4)).join(",");
+      const lons = slice.map(p => p.lon.toFixed(4)).join(",");
+      const url = `https://api.open-meteo.com/v1/forecast?latitude=${lats}&longitude=${lons}` +
+                  `&current=temperature_2m,relative_humidity_2m,apparent_temperature,precipitation,weather_code,wind_speed_10m` +
+                  `&timezone=auto`;
+      const res = await fetch(url);
+      const json = await res.json();
+      const arr = Array.isArray(json) ? json : [json];   // 1点だけのとき配列にならない
+      arr.forEach((r, k) => {
+        const p = slice[k];
+        const c = r.current || {};
+        p.t        = c.temperature_2m ?? null;
+        p.code_wx  = c.weather_code ?? null;
+        p.feel     = c.apparent_temperature ?? null;
+        p.hum      = c.relative_humidity_2m ?? null;
+        p.wind     = c.wind_speed_10m ?? null;
+        p.precip   = c.precipitation ?? null;
+        p.time     = c.time ?? null;
+        p.tz       = r.timezone ?? null;
+      });
+    }
+    document.getElementById("updated").textContent =
+      "🕒 最終更新: " + new Date().toLocaleTimeString("ja-JP");
+  } catch (e) {
+    document.getElementById("updated").textContent = "⚠️ 取得に失敗しました";
+    console.error(e);
+  } finally {
+    refresh();
+    document.getElementById("loading").classList.add("hide");
+    reload.disabled = false;
+  }
+}
+
+/* UI */
+const exInput = document.getElementById("exaggerate");
+const exVal = document.getElementById("exVal");
+exInput.addEventListener("input", e => {
+  exaggeration = +e.target.value;
+  exVal.textContent = "×" + exaggeration;
+  refresh();
+});
+document.getElementById("btn-world").addEventListener("click", () => map.flyTo({ ...VIEWS.world, duration:1500 }));
+document.getElementById("btn-japan").addEventListener("click", () => map.flyTo({ ...VIEWS.japan, duration:1500 }));
+document.getElementById("reload").addEventListener("click", fetchWeather);
+
+/* 詳細パネル */
+const panel = document.getElementById("panel");
+function showPanel(a) {
+  const w = a.code_wx != null ? wmoOf(a.code_wx) : { icon:"…", text:"-" };
+  document.getElementById("p-code").textContent   = a.code;
+  document.getElementById("p-name").textContent   = a.name;
+  document.getElementById("p-country").textContent= a.country;
+  document.getElementById("p-icon").textContent   = w.icon;
+  document.getElementById("p-cond").textContent   = w.text;
+  document.getElementById("p-temp").textContent   = a.t != null ? a.t.toFixed(1) : "--";
+  document.getElementById("p-feel").textContent   = a.feel != null ? a.feel.toFixed(1) + " °C" : "--";
+  document.getElementById("p-hum").textContent    = a.hum  != null ? a.hum + " %"   : "--";
+  document.getElementById("p-wind").textContent   = a.wind != null ? a.wind.toFixed(1) + " km/h" : "--";
+  document.getElementById("p-precip").textContent = a.precip != null ? a.precip + " mm" : "--";
+  document.getElementById("p-time").textContent   = a.time ? a.time.replace("T"," ") + ` (${a.tz||""})` : "--";
+  panel.classList.add("show");
+}
+function hidePanel(){ panel.classList.remove("show"); }
+</script>
+</body>
+</html>
